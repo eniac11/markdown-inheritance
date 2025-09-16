@@ -1,0 +1,430 @@
+#!/usr/bin/bash
+set -e
+
+### SCRIPTING GUIDELINES
+#
+# - Use "set -e" for some early termination
+# - use traps for exit message on error
+# - Remember to use local variables as variables will polute globals
+#
+# **- Make use of "option_parser_error" when pasing options and flags to show that a error occured
+#   and that no furter processing should be done after all options have been gather.
+#
+#   Additionally this means that where possible option parsing should set variables rather than
+#   calling functions. If at command needs options at this stage set variable flags to denote
+#   which command should run after options. If possible make commands not need options or flags
+#   when they have subcommands
+
+BASE_DIR=$(dirname $(readlink -f $0))
+option_parser_error=false
+
+pandoc_version="3.5-alpine"
+requests_version="v2.32.4"
+
+sourced=0
+if [ -n "$ZSH_VERSION" ]; then
+  case $ZSH_EVAL_CONTEXT in *:file) sourced=1;; esac
+elif [ -n "$KSH_VERSION" ]; then
+  [ "$(cd -- "$(dirname -- "$0")" && pwd -P)/$(basename -- "$0")" != "$(cd -- "$(dirname -- "${.sh.file}")" && pwd -P)/$(basename -- "${.sh.file}")" ] && sourced=1
+elif [ -n "$BASH_VERSION" ]; then
+  (return 0 2>/dev/null) && sourced=1
+else # All other shells: examine $0 for known shell binary filenames.
+     # Detects `sh` and `dash`; add additional shell filenames as needed.
+  case ${0##*/} in sh|-sh|dash|-dash) sourced=1;; esac
+fi
+
+__text_strong=$(tput smso)
+__text_bold=$(tput bold)
+__normal=$(tput sgr0)
+
+function __bold() {
+  printf "${__text_bold}$1${__normal}"
+}
+
+function __get_data_path() {
+  realpath -s --relative-to="$BASE_DIR" "$1"
+}
+
+function __invalid_option() {
+  echo "Invalid option: $1"
+}
+
+function usage() {
+  echo usage: $BASE_DIR/pandoc.sh [OPTIONS] [command'|'PANDOC_OPTIONS]
+  __bold "commands:\n"
+  printf "\t$(__bold init)           initialises a pandoc defaults inheritance system files\n"
+  printf "\t$(__bold create-project) creates a project within a folder\n"
+  __bold "command options:\n"
+  printf "\t$(__bold --help)         show this help and exit\n"
+  printf "\t$(__bold --pandoc-help)  show pandoc help and exit\n"
+}
+
+function run_pandoc() {
+  podman run --rm -it -v $BASE_DIR:/data -w /data --network=host pandoc/extra:"$pandoc_version" "$@"
+  local statuscode=$?
+
+  # Exit Codes for pandoc - https://pandoc.org/MANUAL.html#exit-codes
+
+  case "$statuscode" in
+  1)
+    echo PandocIOError
+    ;;
+  3)
+    echo PandocFailError
+    ;;
+  4)
+    echo PandocAppError
+    ;;
+  5)
+    echo PandocTemplateError
+    ;;
+  6)
+    echo PandocOptionError
+    ;;
+  21)
+    echo PandocUnknownReaderError
+    ;;
+  22)
+    echo PandocUnknownWriterError
+    ;;
+  23)
+    echo PandocCiteprocError
+    ;;
+  24)
+    echo PandocBibliographyError
+    ;;
+  31)
+    echo PandocEpubSubdirectoryError
+    ;;
+  31)
+    echo PandocEpubSubdirectoryError
+    ;;
+  43)
+    echo PandocPDFError
+    ;;
+  44)
+    echo PandocXMLError
+    ;;
+  47)
+    echo PandocPDFProgramNotFoundError
+    ;;
+  61)
+    echo PandocHttpError
+    ;;
+  61)
+    echo PandocHttpError
+    ;;
+  62)
+    echo PandocShouldNeverHappenError
+    ;;
+  63)
+    echo PandocSomeError
+    ;;
+  64)
+    echo PandocParseError
+    ;;
+  66)
+    echo PandocMakePDFError
+    ;;
+  67)
+    echo PandocSyntaxMapError
+    ;;
+  83)
+    echo PandocFilterError
+    ;;
+  84)
+    echo PandocLuaError
+    ;;
+  89)
+    echo PandocNoScriptingEngine
+    ;;
+  91)
+    echo PandocMacroLoop
+    ;;
+  92)
+    echo PandocUTF8DecodingError
+    ;;
+  93)
+    echo PandocIpynbDecodingError
+    ;;
+  94)
+    echo PandocUnsupportedCharsetError
+    ;;
+  97)
+    echo PandocCouldNotFindDataFileError
+    ;;
+  92)
+    echo PandocCouldNotFindMetadataFileError
+    ;;
+  99)
+    echo PandocResourceNotFound
+    ;;
+  esac
+}
+
+function __init_usage() {
+  echo usage: $BASE_DIR/pandoc.sh init [--author name] [--language langid] "[-n|--name project_name]"
+  __bold "command options\n"
+  echo "$(__bold "--author name")              name of author. remember to quote if name contains spacaes (defaults to: $(whoami))"
+  echo "$(__bold "--language langid")          language to use (default to: env LANG - $LANG)"
+  echo "$(__bold "-n --name") project_name     name of project (defaults to: directory name)"
+  echo "$(__bold "--vcs")                      initialises a git repo and additional submodules (defaults to: false)"
+}
+
+function __initialise_vcs() {
+  local statuscode=0
+
+  echo Initialising .git dir
+  git init
+  statuscode=$?
+  if [ "$statuscode" -gt 0 ]; then
+    echo could not initialise git repo
+    return 1
+  fi
+
+  git config fetch.fsck.badTimezone ignore
+
+  echo Adding submodule for pandoc lua-filters
+  git submodule add https://github.com/pandoc/lua-filters.git resources/filters/lua-filters
+  statuscode=$?
+  if [ "$statuscode" -gt 0 ]; then
+    echo could not add submodule lua-filters
+    return 1
+  fi
+
+  git submodule add  https://github.com/psf/requests.git  resources/filters/requests
+  statuscode=$?
+  if [ "$statuscode" -gt 0 ]; then
+    echo could not add submodule requests
+    return 1
+  fi
+  pushd resources/filters/requests
+  git checkout -b "$requests_version"
+  popd
+}
+
+function __setup_defaults_file() {
+  local author="$1"
+  if [ -z "$author" ]; then
+    author=$(whoami)
+  fi
+  shift
+  local lang="$1"
+  if [ -z "$lang" ]; then
+    lang=$LANG
+  fi
+  shift
+  echo Setting up defaults file for project: Author: $author, Langauge: $lang
+  cat > defaults.yaml <<EOF
+%READ_ENTIRE_FILE("projects/defaults.yaml")%
+EOF
+}
+
+
+function __setup_disable_float() {
+  cat > resources/disable_float.tex << 'EOF'
+%READ_ENTIRE_FILE("template_resources/disable_float.tex")%
+EOF
+}
+
+function __setup_makeindex_html_ist() {
+  cat > resources/html.ist << 'EOF'
+%READ_ENTIRE_FILE("template_resources/html.ist")%
+EOF
+}
+
+# file: resources/filters/lowercase_links.lua
+function __setup_lowcase_links_lua_filter() {
+  cat > resources/filters/lowercase_links.lua << 'EOF'
+%READ_ENTIRE_FILE("template_resources/filters/lowercase_links.lua")%
+EOF
+}
+
+# file: resources/filters/pandoc-indexer.lua
+function __setup_pandoc_indexer_lua_filter() {
+  cat > resources/filters/pandoc-indexer.lua << 'EOF'
+%READ_ENTIRE_FILE("template_resources/filters/pandoc-indexer.lua")%
+EOF
+
+}
+
+# file: resources/filters/filter-kroki.lua
+function __setup_filter_kroki_lua() {
+  cat > resources/filters/filter-kroki.lua << 'EOF'
+%READ_ENTIRE_FILE("template_resources/filters/filter-kroki.lua")%
+EOF
+}
+
+# file: resources/filters/pandoc-kroki.py
+function __setup_python_kroki_component_filter() {
+  cat > resources/filters/pandoc-kroki.py << 'EOF'
+%READ_ENTIRE_FILE("template_resources/filters/pandoc-kroki.py")%
+EOF
+
+}
+
+function __init() {
+  local use_vcs=false
+  local statuscode=0
+  echo $@
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --help) __init_usage; return 1;;
+      --language) local language="$2"; shift;;
+      --author) local author="$2"; shift ;;
+      -n|--name) local project_name="$2"; shift;;
+      --vcs) use_vcs=true;;
+      *) option_parser_error=true; __invalid_option "$1";;
+    esac
+    shift
+  done
+  if [ "$option_parser_error" = true ]; then
+    return 1
+  fi
+
+  if [ -n "$project_name" ]; then
+    echo Creating project directory: $project_name
+    mkdir "$project_name"
+    pushd "$project_name"
+  fi
+
+  if [ -e "defaults.yaml" ]; then
+    echo defaults.yaml exists not creating project
+    return
+  fi
+
+  # Setup message is inside the function, as author and language
+  # are properly resolved in there
+  __setup_defaults_file "$author" "$language"
+
+  echo Copying setup script
+  cp "$BASE_DIR"/pandoc.sh pandoc.sh
+
+  echo Creating resources dir and filters dir under it
+  mkdir -p resources/filters
+
+  echo Setting up disable_float.tex
+  __setup_disable_float
+
+  echo Creating Makeindex html style template
+  if [ -e resources/html.ist ]; then
+    echo makeindex html.ist exists, not creating project
+    return 1
+  fi
+  __setup_makeindex_html_ist
+  __setup_pandoc_indexer_lua_filter
+
+  __setup_filter_kroki_lua
+  __setup_python_kroki_component_filter
+  if [ "$use_vcs" = false ]; then
+    echo Cloning python reqest module from psf repo. If adding to repo remember to add as submodule or use "'init --vcs command'" flag.
+    git clone -c fetch.fsck.badTimezone=ignore --depth=1 https://github.com/psf/requests.git resources/filters/requests
+    pushd resources/filters/requests
+    git checkout --branch "$requests_version"
+    popd
+  fi
+
+  __setup_lowcase_links_lua_filter
+
+
+  if [ "$use_vcs" = true  ]; then
+    __initialise_vcs
+    statuscode=$?
+    if [ "$statuscode" -gt 0 ]; then
+      popd
+      return 1
+    fi
+  fi
+  if [ -n "$project_name" ]; then
+    popd
+  fi
+}
+
+function __create_subproject_help() {
+  echo usage: "$BASE_DIR"/pandoc.sh create-subproject [OPTIONS]
+  __bold "command options:\n"
+  printf "$(__bold --help)         print this help message and exit\n"
+  printf "$(__bold --title)        set the title for the manuscript\n"
+  printf "$(__bold --subtitle)     set the subtitle for the manuscript\n"
+  printf "$(__bold "-n --name")      set the name of the subproject (defaults to: the current directory)\n"
+}
+
+function __setup_subproject_defaults() {
+  local details_file="$1"; shift;
+
+  cat <<EOF
+%READ_ENTIRE_FILE("subprojects/defaults.yaml")%
+EOF
+}
+
+function __setup_subproject_details() {
+  local title="$1"; shift;
+  local subtitle="$1"; shift;
+  cat <<EOF
+%READ_ENTIRE_FILE("subprojects/details.yaml")%
+EOF
+}
+
+function create_subproject() {
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --help) __create_subproject_help; return;;
+      --subtitle) local subtitle="$2"; shift;;
+      --title) local title="$2"; shift;;
+      -n|--name) project_name="$2"; shift;;
+    esac
+    shift
+  done
+  local defaults_file="$PWD/defaults.yaml"
+  local details_file="$PWD/details.yaml"
+  echo $details_file
+  if [ -n "$project_name" ]; then
+    mkdir "$PWD/$project_name"
+    pushd "$PWD/$project_name"
+    defaults_file="$PWD/defaults.yaml"
+    details_file="$PWD/details.yaml"
+    echo $details_file
+  fi
+
+  if [ -e "$defaults_file" ]; then
+    echo defaults.yaml exists, not overwriting
+    return
+  fi
+  if [ -e "$details_file" ]; then
+    echo details.yaml exists, not overwriting
+    return
+  fi
+
+  __setup_subproject_defaults "/data/$(__get_data_path "$details_file")" > "$defaults_file"
+  echo "$details_file"
+  __setup_subproject_details "$title" "$subtitle" > "$details_file"
+
+  if [ -n "$project_name" ]; then
+    popd
+  fi
+}
+
+function __pandoc_usage() {
+  run_pandoc --help
+}
+
+function _main() {
+  case "$1" in
+    --help) usage; return ;;
+    --pandoc-help) __pandoc_usage; return ;;
+    'init') shift; __init "$@"; return ;;
+    create-subproject) create_subproject "$@"; return ;;
+  esac
+  run_pandoc "$@"
+}
+
+function _sourced_main() {
+  return 0
+}
+
+# check if the file is source
+if [ $sourced -eq 0 ]; then
+  _main "$@"
+else
+  _sourced_main $@
+fi

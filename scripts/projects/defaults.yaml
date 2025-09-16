@@ -1,0 +1,38 @@
+metadata:
+author: $author
+link-citations: true
+lang: $lang
+reference-section-title: References
+
+# variables:
+#   documentclass: report
+# #   geometry:
+#     - margin=3cm
+
+file-scope: true
+
+# data-dir: /home/hadleye/Documents/ObsidianVault/resources
+# podman
+data-dir: /data/resources
+# resource-path: [".", "/home/hadleye/Documents/ObsidianVault/resources"]
+
+# podamn
+resource-path: [".", "/data/resources"]
+
+filters:
+  - lowercase_links.lua
+  - pandoc-crossref
+  #   - pandoc-indexer.lua
+  - citeproc
+
+# csl: /home/hadleye/Zotero/styles/harvard-adapted-for-the-iie(1).csl
+# csl: harvard-anglia-ruskin-university.csl
+# bibliography: /home/hadleye/Documents/ObsidianVault/.pandoc/zotero-library-1.json
+# bibliography: http://127.0.0.1:23119/better-bibtex/export/library?/1/library.json
+# bibliography: .pandoc/zotero-library-1.json
+
+toc: true
+toc-depth: 5
+
+verbosity: ERROR
+# log-file: log.json

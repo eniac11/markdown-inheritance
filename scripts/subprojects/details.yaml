@@ -1,0 +1,10 @@
+from: markdown+wikilinks_title_after_pipe
+
+metadata:
+  title: $title
+  subtitle: $subtitle
+
+variables:
+  documentclass: report
+  geometry:
+    - margin=3cm

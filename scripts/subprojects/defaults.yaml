@@ -1,0 +1,16 @@
+defaults:
+  - $details_file 
+
+metadata:
+  kroki:
+    kroki_url: "http://host.docker.internal:8000/"
+    ext: pdf
+
+lof: true
+
+# number-sections: true
+
+include-in-header: ["disable_float.tex"]
+
+filters:
+  - filter-kroki.lua
