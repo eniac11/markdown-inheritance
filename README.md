@@ -14,6 +14,26 @@ TODO: make it so that the script can do inplace initialisation.
 
 `pandoc.sh create-subproject`
 
+### Building a project
+
+
+> [!NOTE]
+>
+> why `/data`
+>
+> The reason for `/data/` is when pandoc is run it is run from a container with
+> the folder that contains `pandoc.sh` mounted into `/data` therefore it is
+>  neccesary to have `pandoc.sh` copied into the root of the repo.
+
+> [!TIP]
+>
+> `--defaults` can be replace with `-d`
+>
+> `--to <format>` can be replace with `-t <format>`
+
+- Run `pandoc.sh --to pdf --defaults /data/myproject/defaults.yaml --defaults /data/defaults.yaml`
+
+
 ## Runtime dependecies
 
 - a container runner - podman
